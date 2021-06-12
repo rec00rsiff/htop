@@ -60,12 +60,6 @@ in the source distribution for its full text.
 #endif
 
 
-// CentOS 6's kernel doesn't provide a definition of O_PATH
-// based on definition taken from uapi/asm-generic/fcnth.h in Linux kernel tree
-#ifndef O_PATH
-# define O_PATH 010000000
-#endif
-
 static long long btime = -1;
 
 static long jiffy;
@@ -386,7 +380,7 @@ static bool LinuxProcessList_readStatFile(Process* process, openat_arg_t procFd,
 }
 
 
-static bool LinuxProcessList_statProcessDir(Process* process, openat_arg_t procFd) {
+static bool LinuxProcessList_updateUser(ProcessList* processList, Process* process, openat_arg_t procFd) {
    struct stat sstat;
 #ifdef HAVE_OPENAT
    int statok = fstat(procFd, &sstat);
@@ -395,7 +389,12 @@ static bool LinuxProcessList_statProcessDir(Process* process, openat_arg_t procF
 #endif
    if (statok == -1)
       return false;
-   process->st_uid = sstat.st_uid;
+
+   if (process->st_uid != sstat.st_uid) {
+      process->st_uid = sstat.st_uid;
+      process->user = UsersTable_getRef(processList->usersTable, sstat.st_uid);
+   }
+
    return true;
 }
 
@@ -517,18 +516,24 @@ static void LinuxProcessList_calcLibSize_helper(ATTR_UNUSED ht_key_t key, void* 
    *d += v->size;
 }
 
-static uint64_t LinuxProcessList_calcLibSize(openat_arg_t procFd) {
+static void LinuxProcessList_readMaps(LinuxProcess* process, openat_arg_t procFd, bool calcSize, bool checkDeletedLib) {
+   Process* proc = (Process*)process;
+
+   proc->usesDeletedLib = false;
+
    FILE* mapsfile = fopenat(procFd, "maps", "r");
    if (!mapsfile)
-      return 0;
+      return;
 
-   Hashtable* ht = Hashtable_new(64, true);
+   Hashtable* ht = NULL;
+   if (calcSize)
+      ht = Hashtable_new(64, true);
 
    char buffer[1024];
    while (fgets(buffer, sizeof(buffer), mapsfile)) {
       uint64_t map_start;
       uint64_t map_end;
-      char map_perm[5];
+      bool map_execute;
       unsigned int map_devmaj;
       unsigned int map_devmin;
       uint64_t map_inode;
@@ -548,8 +553,7 @@ static uint64_t LinuxProcessList_calcLibSize(openat_arg_t procFd) {
       if (' ' != *readptr++)
          continue;
 
-      memcpy(map_perm, readptr, 4);
-      map_perm[4] = '\0';
+      map_execute = (readptr[2] == 'x');
       readptr += 4;
       if (' ' != *readptr++)
          continue;
@@ -575,38 +579,60 @@ static uint64_t LinuxProcessList_calcLibSize(openat_arg_t procFd) {
       if (!map_inode)
          continue;
 
-      LibraryData* libdata = Hashtable_get(ht, map_inode);
-      if (!libdata) {
-         libdata = xCalloc(1, sizeof(LibraryData));
-         Hashtable_put(ht, map_inode, libdata);
+      if (calcSize) {
+         LibraryData* libdata = Hashtable_get(ht, map_inode);
+         if (!libdata) {
+            libdata = xCalloc(1, sizeof(LibraryData));
+            Hashtable_put(ht, map_inode, libdata);
+         }
+
+         libdata->size += map_end - map_start;
+         libdata->exec |= map_execute;
       }
 
-      libdata->size += map_end - map_start;
-      libdata->exec |= 'x' == map_perm[2];
+      if (checkDeletedLib && map_execute && !proc->usesDeletedLib) {
+         while (*readptr == ' ')
+            readptr++;
+
+         if (*readptr != '/')
+            continue;
+
+         if (String_startsWith(readptr, "/memfd:"))
+            continue;
+
+         if (strstr(readptr, " (deleted)\n")) {
+            proc->usesDeletedLib = true;
+            if (!calcSize)
+               break;
+         }
+      }
    }
 
    fclose(mapsfile);
 
-   uint64_t total_size = 0;
-   Hashtable_foreach(ht, LinuxProcessList_calcLibSize_helper, &total_size);
+   if (calcSize) {
+      uint64_t total_size = 0;
+      Hashtable_foreach(ht, LinuxProcessList_calcLibSize_helper, &total_size);
 
-   Hashtable_delete(ht);
+      Hashtable_delete(ht);
 
-   return total_size / pageSize;
+      process->m_lrs = total_size / pageSize;
+   }
 }
 
-static bool LinuxProcessList_readStatmFile(LinuxProcess* process, openat_arg_t procFd, bool performLookup, unsigned long long realtimeMs) {
+static bool LinuxProcessList_readStatmFile(LinuxProcess* process, openat_arg_t procFd) {
    FILE* statmfile = fopenat(procFd, "statm", "r");
    if (!statmfile)
       return false;
 
-   long tmp_m_lrs = 0;
+   long int dummy;
+
    int r = fscanf(statmfile, "%ld %ld %ld %ld %ld %ld %ld",
                   &process->super.m_virt,
                   &process->super.m_resident,
                   &process->m_share,
                   &process->m_trs,
-                  &tmp_m_lrs,
+                  &dummy, /* unused since Linux 2.6; always 0 */
                   &process->m_drs,
                   &process->m_dt);
    fclose(statmfile);
@@ -614,22 +640,6 @@ static bool LinuxProcessList_readStatmFile(LinuxProcess* process, openat_arg_t p
    if (r == 7) {
       process->super.m_virt *= pageSizeKB;
       process->super.m_resident *= pageSizeKB;
-
-      if (tmp_m_lrs) {
-         process->m_lrs = tmp_m_lrs;
-      } else if (performLookup) {
-         // Check if we really should recalculate the M_LRS value for this process
-         uint64_t passedTimeInMs = realtimeMs - process->last_mlrs_calctime;
-
-         uint64_t recheck = ((uint64_t)rand()) % 2048;
-
-         if(passedTimeInMs > 2000 || passedTimeInMs > recheck) {
-            process->last_mlrs_calctime = realtimeMs;
-            process->m_lrs = LinuxProcessList_calcLibSize(procFd);
-         }
-      } else {
-         // Keep previous value
-      }
    }
 
    return r == 7;
@@ -1304,7 +1314,7 @@ static bool LinuxProcessList_recurseProcTree(LinuxProcessList* this, openat_arg_
       proc->isUserlandThread = proc->pid != proc->tgid;
 
 #ifdef HAVE_OPENAT
-      int procFd = openat(dirFd, entry->d_name, O_PATH | O_DIRECTORY | O_NOFOLLOW);
+      int procFd = openat(dirFd, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
       if (procFd < 0)
          goto errorReadingProcess;
 #else
@@ -1340,8 +1350,30 @@ static bool LinuxProcessList_recurseProcTree(LinuxProcessList* this, openat_arg_
       if (settings->flags & PROCESS_FLAG_IO)
          LinuxProcessList_readIoFile(lp, procFd, pl->realtimeMs);
 
-      if (!LinuxProcessList_readStatmFile(lp, procFd, !!(settings->flags & PROCESS_FLAG_LINUX_LRS_FIX), pl->realtimeMs))
+      if (!LinuxProcessList_readStatmFile(lp, procFd))
          goto errorReadingProcess;
+
+      {
+         bool prev = proc->usesDeletedLib;
+
+         if ((lp->m_lrs == 0 && (settings->flags & PROCESS_FLAG_LINUX_LRS_FIX)) ||
+             (settings->highlightDeletedExe && !proc->procExeDeleted && !proc->isKernelThread && !proc->isUserlandThread)) {
+            // Check if we really should recalculate the M_LRS value for this process
+            uint64_t passedTimeInMs = pl->realtimeMs - lp->last_mlrs_calctime;
+
+            uint64_t recheck = ((uint64_t)rand()) % 2048;
+
+            if (passedTimeInMs > 2000 || passedTimeInMs > recheck) {
+               lp->last_mlrs_calctime = pl->realtimeMs;
+               LinuxProcessList_readMaps(lp, procFd, settings->flags & PROCESS_FLAG_LINUX_LRS_FIX, settings->highlightDeletedExe);
+            }
+         } else {
+            /* Copy from process structure in threads and reset if setting got disabled */
+            proc->usesDeletedLib = (proc->isUserlandThread && parent) ? parent->usesDeletedLib : false;
+         }
+
+         proc->mergedCommand.exeChanged |= prev ^ proc->usesDeletedLib;
+      }
 
       if ((settings->flags & PROCESS_FLAG_LINUX_SMAPS) && !Process_isKernelThread(proc)) {
          if (!parent) {
@@ -1378,12 +1410,10 @@ static bool LinuxProcessList_recurseProcTree(LinuxProcessList* this, openat_arg_
       proc->percent_cpu = CLAMP(percent_cpu, 0.0F, cpus * 100.0F);
       proc->percent_mem = proc->m_resident / (double)(pl->totalMem) * 100.0;
 
+      if (! LinuxProcessList_updateUser(pl, proc, procFd))
+         goto errorReadingProcess;
+
       if (!preExisting) {
-
-         if (! LinuxProcessList_statProcessDir(proc, procFd))
-            goto errorReadingProcess;
-
-         proc->user = UsersTable_getRef(pl->usersTable, proc->st_uid);
 
          #ifdef HAVE_OPENVZ
          if (settings->flags & PROCESS_FLAG_LINUX_OPENVZ) {

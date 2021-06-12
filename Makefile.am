@@ -44,7 +44,6 @@ myhtopsources = \
 	Hashtable.c \
 	Header.c \
 	HostnameMeter.c \
-	htop.c \
 	IncSet.c \
 	InfoScreen.c \
 	ListItem.c \
@@ -332,6 +331,37 @@ myhtopplatheaders = $(solaris_platform_headers)
 myhtopplatsources = $(solaris_platform_sources)
 endif
 
+# Performance Co-Pilot (PCP)
+# --------------------------
+
+pcp_platform_headers = \
+	pcp/PCPProcess.h \
+	pcp/PCPProcessList.h \
+	pcp/Platform.h \
+	pcp/ProcessField.h \
+	linux/PressureStallMeter.h \
+	linux/ZramMeter.h \
+	linux/ZramStats.h \
+	zfs/ZfsArcMeter.h \
+	zfs/ZfsArcStats.h \
+	zfs/ZfsCompressedArcMeter.h
+
+pcp_platform_sources = \
+	pcp/PCPProcess.c \
+	pcp/PCPProcessList.c \
+	pcp/Platform.c \
+	linux/PressureStallMeter.c \
+	linux/ZramMeter.c \
+	zfs/ZfsArcMeter.c \
+	zfs/ZfsCompressedArcMeter.c
+
+if HTOP_PCP
+myhtopplatprogram = pcp-htop
+myhtopplatheaders = $(pcp_platform_headers)
+myhtopplatsources = $(pcp_platform_sources)
+pcp_htop_SOURCES  = $(myhtopplatprogram).c $(myhtopheaders) $(myhtopplatheaders) $(myhtopsources) $(myhtopplatsources)
+endif
+
 # Unsupported
 # -----------
 
@@ -357,7 +387,7 @@ endif
 # ----
 
 bin_PROGRAMS = $(myhtopplatprogram)
-htop_SOURCES = $(myhtopheaders) $(myhtopplatheaders) $(myhtopsources) $(myhtopplatsources)
+htop_SOURCES = $(myhtopplatprogram).c $(myhtopheaders) $(myhtopplatheaders) $(myhtopsources) $(myhtopplatsources)
 nodist_htop_SOURCES = config.h
 
 target:

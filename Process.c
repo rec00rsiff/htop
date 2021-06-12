@@ -472,7 +472,8 @@ void Process_makeCommandStr(Process *this) {
 
    const int baseAttr = Process_isThread(this) ? CRT_colors[PROCESS_THREAD_BASENAME] : CRT_colors[PROCESS_BASENAME];
    const int commAttr = Process_isThread(this) ? CRT_colors[PROCESS_THREAD_COMM] : CRT_colors[PROCESS_COMM];
-   const int delAttr = CRT_colors[FAILED_READ];
+   const int delExeAttr = CRT_colors[FAILED_READ];
+   const int delLibAttr = CRT_colors[PROCESS_TAG];
 
    /* Establish some shortcuts to data we need */
    const char *cmdline = this->cmdline;
@@ -529,14 +530,18 @@ void Process_makeCommandStr(Process *this) {
          WRITE_HIGHLIGHT(exeBasenameOffset, exeBasenameLen, commAttr, CMDLINE_HIGHLIGHT_FLAG_COMM);
       WRITE_HIGHLIGHT(exeBasenameOffset, exeBasenameLen, baseAttr, CMDLINE_HIGHLIGHT_FLAG_BASENAME);
       if (this->procExeDeleted)
-         WRITE_HIGHLIGHT(exeBasenameOffset, exeBasenameLen, delAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
+         WRITE_HIGHLIGHT(exeBasenameOffset, exeBasenameLen, delExeAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
+      else if (this->usesDeletedLib)
+         WRITE_HIGHLIGHT(exeBasenameOffset, exeBasenameLen, delLibAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
       str = stpcpy(str, procExe);
    } else {
       if (haveCommInExe)
          WRITE_HIGHLIGHT(0, exeBasenameLen, commAttr, CMDLINE_HIGHLIGHT_FLAG_COMM);
       WRITE_HIGHLIGHT(0, exeBasenameLen, baseAttr, CMDLINE_HIGHLIGHT_FLAG_BASENAME);
       if (this->procExeDeleted)
-         WRITE_HIGHLIGHT(0, exeBasenameLen, delAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
+         WRITE_HIGHLIGHT(0, exeBasenameLen, delExeAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
+      else if (this->usesDeletedLib)
+         WRITE_HIGHLIGHT(0, exeBasenameLen, delLibAttr, CMDLINE_HIGHLIGHT_FLAG_DELETED);
       str = stpcpy(str, procExe + exeBasenameOffset);
    }
 
@@ -766,8 +771,12 @@ void Process_writeField(const Process* this, RichString* str, ProcessField field
       const char* procExe;
       if (this->procExe) {
          attr = CRT_colors[Process_isUserlandThread(this) ? PROCESS_THREAD_BASENAME : PROCESS_BASENAME];
-         if (this->procExeDeleted && this->settings->highlightDeletedExe)
-            attr = CRT_colors[FAILED_READ];
+         if (this->settings->highlightDeletedExe) {
+            if (this->procExeDeleted)
+               attr = CRT_colors[FAILED_READ];
+            else if (this->usesDeletedLib)
+               attr = CRT_colors[PROCESS_TAG];
+         }
          procExe = this->procExe + this->procExeBasenameOffset;
       } else {
          attr = CRT_colors[PROCESS_SHADOW];
@@ -963,6 +972,7 @@ void Process_init(Process* this, const Settings* settings) {
    this->show = true;
    this->updated = false;
    this->cmdlineBasenameEnd = -1;
+   this->st_uid = (uid_t)-1;
 
    if (Process_getuid == (uid_t)-1) {
       Process_getuid = getuid();
