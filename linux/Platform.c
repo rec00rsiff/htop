@@ -210,6 +210,36 @@ int Platform_getUptime() {
    return floor(uptime);
 }
 
+float Platform_getTemp() {
+   float ftemp = 0;
+
+   FILE* fd = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+   if(!fd) { return ftemp; }
+
+   int itemp = 0;
+   fscanf(fd, "%d", &itemp);
+   ftemp = itemp;
+
+   if(ftemp >= 1000) { ftemp /= 1000; }
+     
+   fclose(fd);
+
+   return ftemp;
+}
+
+uint64_t Platform_getFreq() {
+   int freq = 0;
+
+   FILE* fd = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r");
+   if(!fd) { return freq; }
+
+   fscanf(fd, "%d", &freq);
+    
+   fclose(fd);
+
+   return freq;
+}
+
 void Platform_getLoadAverage(double* one, double* five, double* fifteen) {
    FILE* fd = fopen(PROCDIR "/loadavg", "r");
    if (!fd)

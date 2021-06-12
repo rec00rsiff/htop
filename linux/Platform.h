@@ -48,6 +48,10 @@ void Platform_setBindings(Htop_Action* keys);
 
 int Platform_getUptime(void);
 
+float Platform_getTemp(void);
+
+uint64_t Platform_getFreq(void);
+
 void Platform_getLoadAverage(double* one, double* five, double* fifteen);
 
 int Platform_getMaxPid(void);

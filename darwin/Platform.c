@@ -33,9 +33,14 @@ in the source distribution for its full text.
 #include "SysArchMeter.h"
 #include "TasksMeter.h"
 #include "UptimeMeter.h"
+#include "TempMeter.h"
+#include "FreqMeter.h"
 #include "darwin/DarwinProcessList.h"
 #include "zfs/ZfsArcMeter.h"
 #include "zfs/ZfsCompressedArcMeter.h"
+#include <IOKit/IOKitLib.h>
+#include <x86intrin.h>
+#include <pthread.h>
 
 #ifdef HAVE_HOST_GET_CLOCK_SERVICE
 #include <mach/clock.h>
@@ -100,6 +105,8 @@ const MeterClass* const Platform_meterTypes[] = {
    &HostnameMeter_class,
    &SysArchMeter_class,
    &UptimeMeter_class,
+   &TempMeter_class,
+   &FreqMeter_class,
    &AllCPUsMeter_class,
    &AllCPUs2Meter_class,
    &AllCPUs4Meter_class,
@@ -122,6 +129,24 @@ double Platform_timebaseToNS = 1.0;
 
 long Platform_clockTicksPerSec = -1;
 
+uint64_t freq = 0;
+
+static void* Platform_loopfreq(void* arg)
+{
+   while(1)
+   {
+      uint32_t coreid;
+
+      _mm_lfence();
+      uint64_t start = __rdtsc();
+      sleep(1);
+      uint64_t end = __rdtscp(&coreid);
+      _mm_lfence();
+
+      freq = end - start;
+   }
+}
+
 void Platform_init(void) {
    // Check if we can determine the timebase used on this system.
    // If the API is unavailable assume we get our timebase in nanoseconds.
@@ -139,6 +164,12 @@ void Platform_init(void) {
 
    if (errno || Platform_clockTicksPerSec < 1) {
       CRT_fatalError("Unable to retrieve clock tick rate");
+   }
+
+   pthread_t id;
+   if(pthread_create(&id, NULL, Platform_loopfreq, NULL) != 0)
+   {
+      perror("failed to create a freq loop thread\n");
    }
 }
 
@@ -163,6 +194,87 @@ int Platform_getUptime() {
    gettimeofday(&currTime, NULL);
 
    return (int) difftime(currTime.tv_sec, bootTime.tv_sec);
+}
+
+typedef struct {
+   uint32_t key;
+
+   char v_l_skip[22];
+   char v_l_align[2];
+
+   uint32_t k_size;
+   uint32_t k_type;
+   char k_attr;
+   char k_align[3];
+
+   char s_skip[2];
+
+   char sig;
+   char f_align[1];
+   uint32_t idx;
+   unsigned char data[32];
+} smc_dat_t;
+
+float Platform_getTemp() {
+   float temp = 0;
+
+   CFMutableDictionaryRef dict = IOServiceMatching("AppleSMC");
+   io_iterator_t iter;
+   kern_return_t kret = IOServiceGetMatchingServices(kIOMasterPortDefault, dict, &iter);
+
+   if(kret == KERN_SUCCESS)
+   {
+      io_object_t dev = IOIteratorNext(iter);
+      if(dev)
+      {
+         io_connect_t cport;
+         kret = IOServiceOpen(dev, mach_task_self(), 0, &cport);
+         if(kret == KERN_SUCCESS)
+         {
+            smc_dat_t in;
+            smc_dat_t out;
+
+            bzero(&in, sizeof(smc_dat_t));
+            bzero(&out, sizeof(smc_dat_t));
+
+            in.key = 0x54433050; //TC0P //0x54433048 TC0D
+            in.sig = 0x09; //info
+            //index -> 2
+
+            size_t in_size = sizeof(smc_dat_t);
+            size_t out_size = sizeof(smc_dat_t);
+            //printf("insize: %lu\n", in_size);
+            //printf("sig_offset: %lu\n", offsetof(smc_dat_t, sig));
+            kret = IOConnectCallStructMethod(cport, 2, &in, in_size, &out, &out_size);
+            if(kret == KERN_SUCCESS)
+            {
+               temp = out.k_size;
+               //__builtin_dump_struct(&out, &printf);
+               in.k_size = out.k_size;
+               in.sig = 0x05; //read
+               kret = IOConnectCallStructMethod(cport, 2, &in, in_size, &out, &out_size);
+               //sp78
+               //sbit 7(-----) 8(-----)
+               //        int      fr
+
+               temp = (float)((out.data[0] << 8) | out.data[1]) / 256;
+            }
+            else
+            {
+               temp = kret;
+            }
+         }
+         kret = IOServiceClose(dev);
+      }
+      IOObjectRelease(dev);
+   }
+   IOObjectRelease(iter);
+
+   return temp;
+}
+
+uint64_t Platform_getFreq() {
+   return freq;
 }
 
 void Platform_getLoadAverage(double* one, double* five, double* fifteen) {

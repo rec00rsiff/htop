@@ -70,6 +70,8 @@ myhtopsources = \
 	TasksMeter.c \
 	TraceScreen.c \
 	UptimeMeter.c \
+	TempMeter.c \
+	FreqMeter.c \
 	UsersTable.c \
 	Vector.c \
 	XUtils.c
@@ -126,6 +128,8 @@ myhtopheaders = \
 	TasksMeter.h \
 	TraceScreen.h \
 	UptimeMeter.h \
+	TempMeter.h \
+	FreqMeter.h \
 	UsersTable.h \
 	Vector.h \
 	XUtils.h

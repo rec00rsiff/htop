@@ -19,6 +19,8 @@ in the source distribution for its full text.
 #include "Platform.h"
 #include "XUtils.h"
 
+#define FORCE_TEMP_METER
+#define FORCE_FREQ_METER
 
 void Settings_delete(Settings* this) {
    free(this->filename);
@@ -55,7 +57,7 @@ static void Settings_readMeterModes(Settings* this, const char* line, int column
 }
 
 static void Settings_defaultMeters(Settings* this, unsigned int initialCpuCount) {
-   int sizes[] = { 3, 3 };
+   int sizes[] = { 3, 5 };
    if (initialCpuCount > 4 && initialCpuCount <= 128) {
       sizes[1]++;
    }
@@ -103,6 +105,12 @@ static void Settings_defaultMeters(Settings* this, unsigned int initialCpuCount)
    this->columns[1].names[r] = xStrdup("LoadAverage");
    this->columns[1].modes[r++] = TEXT_METERMODE;
    this->columns[1].names[r] = xStrdup("Uptime");
+   this->columns[1].modes[r++] = TEXT_METERMODE;
+
+   this->columns[1].names[r] = xStrdup("Temp");
+   this->columns[1].modes[r++] = TEXT_METERMODE;
+    
+   this->columns[1].names[r] = xStrdup("Freq");
    this->columns[1].modes[r++] = TEXT_METERMODE;
 }
 
@@ -248,7 +256,64 @@ static bool Settings_read(Settings* this, const char* fileName, unsigned int ini
       String_freeArray(option);
    }
    fclose(fd);
-   if (!didReadMeters) {
+   if (didReadMeters) 
+   {
+#if defined FORCE_TEMP_METER || defined FORCE_FREQ_METER
+      int ftidx = this->columns[1].len;
+      size_t realloc_len = ftidx;
+#ifdef FORCE_TEMP_METER
+      uint8_t t_det = 0;
+#endif
+#ifdef FORCE_FREQ_METER
+      uint8_t f_det = 0;
+#endif
+      char** cnames = this->columns[1].names;
+      for(int i = 0; i < ftidx; ++i)
+      {
+#ifdef FORCE_TEMP_METER
+         if(strcmp("Temp", cnames[i]) == 0)
+         {
+            t_det = 1;
+            break;
+         }
+#endif
+#ifdef FORCE_FREQ_METER
+         if(strcmp("Freq", cnames[i]) == 0)
+         {
+            f_det = 1;
+            break;
+         }
+#endif
+      }
+#ifdef FORCE_TEMP_METER
+      if(!t_det) { ++realloc_len; }
+#endif
+#ifdef FORCE_FREQ_METER
+      if(!f_det) { ++realloc_len; }
+#endif
+      this->columns[1].names = xReallocArray(this->columns[1].names, realloc_len + 1, sizeof(char*));
+      this->columns[1].modes = xReallocArray(this->columns[1].modes, realloc_len, sizeof(int));
+
+#ifdef FORCE_TEMP_METER
+      if(!t_det)
+      {
+         this->columns[1].names[ftidx] = xStrdup("Temp");
+         this->columns[1].modes[ftidx++] = TEXT_METERMODE;
+      }
+#endif
+#ifdef FORCE_FREQ_METER
+      if(!f_det)
+      {
+         this->columns[1].names[ftidx] = xStrdup("Freq");
+         this->columns[1].modes[ftidx++] = TEXT_METERMODE;
+      }
+#endif
+
+      this->columns[1].len = ftidx;
+#endif //disj
+   }
+   else 
+   {
       Settings_defaultMeters(this, initialCpuCount);
    }
    return didReadFields;
