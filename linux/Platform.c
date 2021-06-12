@@ -48,6 +48,8 @@ in the source distribution for its full text.
 #include "SysArchMeter.h"
 #include "TasksMeter.h"
 #include "UptimeMeter.h"
+#include "TempMeter.h"
+#include "FreqMeter.h"
 #include "XUtils.h"
 #include "linux/IOPriority.h"
 #include "linux/IOPriorityPanel.h"
@@ -167,6 +169,8 @@ const MeterClass* const Platform_meterTypes[] = {
    &HugePageMeter_class,
    &TasksMeter_class,
    &UptimeMeter_class,
+   &TempMeter_class,
+   &FreqMeter_class,
    &BatteryMeter_class,
    &HostnameMeter_class,
    &AllCPUsMeter_class,
