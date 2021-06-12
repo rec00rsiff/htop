@@ -13,7 +13,7 @@ static const int FreqMeter_attributes[] = {
 static void FreqMeter_updateValues(Meter* this) {
    uint64_t freq = Platform_getFreq();
     
-   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%llu MHz", freq / 1000000);
+   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%llu MHz", freq);
 }
 
 const MeterClass FreqMeter_class = {

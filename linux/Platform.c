@@ -241,7 +241,7 @@ uint64_t Platform_getFreq() {
     
    fclose(fd);
 
-   if(freq < 10) { freq *= 1000; }
+   if(freq < 10) { freq *= 1000; } else { freq /= 1000; /*kernel.org states KHz*/ }
    return freq;
 }
 

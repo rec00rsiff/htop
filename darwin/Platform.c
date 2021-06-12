@@ -274,7 +274,7 @@ float Platform_getTemp() {
 }
 
 uint64_t Platform_getFreq() {
-   return freq;
+   return freq / 1000000;
 }
 
 void Platform_getLoadAverage(double* one, double* five, double* fifteen) {
