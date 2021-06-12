@@ -241,6 +241,7 @@ uint64_t Platform_getFreq() {
     
    fclose(fd);
 
+   if(freq < 10) { freq *= 1000; }
    return freq;
 }
 
